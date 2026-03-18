@@ -1,0 +1,15 @@
+[Unit]
+Description=Tesla Driving Log Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yuto
+WorkingDirectory=/home/yuto/seeda-corp/experiments/tesla-dashboard
+ExecStart=/home/yuto/seeda-corp/experiments/tesla-dashboard/run_collector.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

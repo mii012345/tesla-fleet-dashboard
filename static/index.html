@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tesla Dashboard</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #f5f7fa; color: #1a1a2e;
+  }
+  header {
+    background: #fff; padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid #e2e8f0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  header h1 { font-size: 20px; font-weight: 600; color: #1a1a2e; display: flex; align-items: center; gap: 8px; }
+  header h1 svg { width: 24px; height: 28px; fill: #e31937; }
+  .refresh-btn {
+    background: #f0f4f8; border: 1px solid #d1d9e6; color: #4a5568;
+    padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .refresh-btn:hover { background: #e2e8f0; color: #1a1a2e; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    grid-template-rows: 400px 320px auto;
+    gap: 1px; background: #e2e8f0;
+    max-width: 1400px; margin: 0 auto;
+  }
+
+  .panel {
+    background: #fff; padding: 20px;
+  }
+  .panel h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 1px;
+    color: #8895a7; margin-bottom: 12px;
+  }
+
+  /* Map */
+  #map-panel { padding: 0; position: relative; }
+  #map { width: 100%; height: 100%; }
+
+  /* Stats */
+  .stats-grid {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+  .stat-card {
+    background: #f8fafc; border-radius: 10px; padding: 14px;
+    border: 1px solid #e8edf2;
+  }
+  .stat-label { font-size: 11px; color: #8895a7; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 28px; font-weight: 700; margin-top: 4px; color: #1a1a2e; }
+  .stat-unit { font-size: 14px; color: #8895a7; font-weight: 400; }
+  .stat-sub { font-size: 12px; color: #a0aec0; margin-top: 2px; }
+
+  .battery-bar {
+    width: 100%; height: 8px; background: #e8edf2; border-radius: 4px;
+    margin-top: 8px; overflow: hidden;
+  }
+  .battery-fill {
+    height: 100%; border-radius: 4px;
+    transition: width 0.5s ease;
+  }
+
+  .status-badge {
+    display: inline-block; padding: 4px 12px; border-radius: 12px;
+    font-size: 12px; font-weight: 600; margin-top: 8px;
+  }
+  .status-parked { background: #dcfce7; color: #16a34a; }
+  .status-driving { background: #fee2e2; color: #dc2626; }
+  .status-charging { background: #dbeafe; color: #2563eb; }
+  .status-sleeping { background: #fef9c3; color: #ca8a04; }
+
+  /* Charts */
+  .chart-container { position: relative; height: 260px; }
+
+  /* Trips table */
+  .trips-panel { grid-column: 1 / -1; }
+  table {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  th { text-align: left; color: #8895a7; font-weight: 500; padding: 10px 8px; border-bottom: 2px solid #e8edf2; }
+  td { padding: 10px 8px; border-bottom: 1px solid #f1f5f9; color: #334155; }
+  tr:hover td { background: #f8fafc; cursor: pointer; }
+  tr.trip-selected td { background: #eff6ff; }
+  tr.trip-row td:first-child { padding-left: 12px; border-left: 3px solid transparent; }
+  tr.trip-selected td:first-child { border-left-color: #e31937; }
+
+  .efficiency-good { color: #16a34a; font-weight: 600; }
+  .efficiency-mid { color: #ca8a04; font-weight: 600; }
+  .efficiency-bad { color: #dc2626; font-weight: 600; }
+
+  .no-data {
+    text-align: center; padding: 60px; color: #a0aec0; font-size: 14px;
+  }
+
+  @media (max-width: 768px) {
+    .grid {
+      grid-template-columns: 1fr;
+      grid-template-rows: 300px auto 280px 280px auto;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><img src="/static/tesla-logo.png" alt="Tesla" style="height:32px;width:auto;">Dashboard</h1>
+  <button class="refresh-btn" onclick="refreshAll()">Refresh</button>
+</header>
+
+<div class="grid">
+  <!-- Map -->
+  <div class="panel" id="map-panel">
+    <div id="map"></div>
+  </div>
+
+  <!-- Real-time Stats -->
+  <div class="panel" id="stats-panel">
+    <h2>Vehicle Status</h2>
+    <div id="status-badge-container"></div>
+    <div class="stats-grid" style="margin-top: 12px;">
+      <div class="stat-card">
+        <div class="stat-label">Battery</div>
+        <div class="stat-value" id="stat-battery">--<span class="stat-unit">%</span></div>
+        <div class="battery-bar"><div class="battery-fill" id="battery-fill" style="width:0%"></div></div>
+        <div class="stat-sub" id="stat-range">-- km</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Speed</div>
+        <div class="stat-value" id="stat-speed">--<span class="stat-unit">km/h</span></div>
+        <div class="stat-sub" id="stat-heading">--</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Inside</div>
+        <div class="stat-value" id="stat-temp-in">--<span class="stat-unit">°C</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Outside</div>
+        <div class="stat-value" id="stat-temp-out">--<span class="stat-unit">°C</span></div>
+      </div>
+      <div class="stat-card" style="grid-column: 1 / -1;">
+        <div class="stat-label">Odometer</div>
+        <div class="stat-value" id="stat-odometer">--<span class="stat-unit">km</span></div>
+        <div class="stat-sub" id="stat-updated">--</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Battery Chart -->
+  <div class="panel">
+    <h2>Battery Level (24h)</h2>
+    <div class="chart-container">
+      <canvas id="battery-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Energy Chart -->
+  <div class="panel">
+    <h2>Energy per Trip</h2>
+    <div class="chart-container">
+      <canvas id="energy-chart"></canvas>
+    </div>
+  </div>
+
+  <!-- Trips Table -->
+  <div class="panel trips-panel">
+    <h2>Recent Trips (7 days)
+      <span style="float:right;font-size:11px;text-transform:none;letter-spacing:0;font-weight:400;">
+        <span style="color:#3b82f6;">&#9632;</span> ~20km/h
+        <span style="color:#22c55e;margin-left:6px;">&#9632;</span> ~40
+        <span style="color:#eab308;margin-left:6px;">&#9632;</span> ~60
+        <span style="color:#ef4444;margin-left:6px;">&#9632;</span> 60+
+      </span>
+    </h2>
+    <div id="trips-table"></div>
+  </div>
+</div>
+
+<script>
+const BATTERY_KWH = 75; // Model Y usable capacity
+const MI_TO_KM = 1.60934;
+
+// ─── Map ──────────────────────────────────────────
+const map = L.map('map').setView([35.88, 139.61], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>',
+  maxZoom: 19,
+}).addTo(map);
+
+let tripLayers = L.layerGroup().addTo(map);
+let carMarker = null;
+
+// ─── Charts ───────────────────────────────────────
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { display: false } },
+  scales: {
+    x: { ticks: { color: '#8895a7', maxTicksLimit: 8 }, grid: { color: '#f1f5f9' } },
+    y: { ticks: { color: '#8895a7' }, grid: { color: '#f1f5f9' } },
+  },
+};
+
+const batteryChart = new Chart(document.getElementById('battery-chart'), {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    data: [], borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.08)',
+    fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2,
+  }]},
+  options: { ...chartDefaults, scales: {
+    ...chartDefaults.scales,
+    y: { ...chartDefaults.scales.y, min: 0, max: 100,
+      ticks: { ...chartDefaults.scales.y.ticks, callback: v => v + '%' }},
+  }},
+});
+
+const energyChart = new Chart(document.getElementById('energy-chart'), {
+  type: 'bar',
+  data: { labels: [], datasets: [{
+    data: [], backgroundColor: [],
+    borderRadius: 4, maxBarThickness: 40,
+  }]},
+  options: { ...chartDefaults, scales: {
+    ...chartDefaults.scales,
+    y: { ...chartDefaults.scales.y,
+      ticks: { ...chartDefaults.scales.y.ticks, callback: v => v.toFixed(1) + ' kWh/km' }},
+  }},
+});
+
+// ─── Data Fetching ────────────────────────────────
+async function fetchLatest() {
+  try {
+    const resp = await fetch('/api/latest');
+    const d = await resp.json();
+    if (d.error) return;
+
+    const bat = d.battery_level ?? '--';
+    const range_km = d.battery_range ? d.battery_range.toFixed(0) : '--';
+    const speed_kmh = d.speed ? d.speed.toFixed(0) : '0';
+    const odo_km = d.odometer ? d.odometer.toFixed(0) : '--';
+
+    document.getElementById('stat-battery').innerHTML = `${bat}<span class="stat-unit">%</span>`;
+    document.getElementById('stat-range').textContent = `${range_km} km remaining`;
+    document.getElementById('stat-speed').innerHTML = `${speed_kmh}<span class="stat-unit">km/h</span>`;
+    document.getElementById('stat-temp-in').innerHTML = `${d.inside_temp ?? '--'}<span class="stat-unit">°C</span>`;
+    document.getElementById('stat-temp-out').innerHTML = `${d.outside_temp ?? '--'}<span class="stat-unit">°C</span>`;
+    document.getElementById('stat-odometer').innerHTML = `${Number(odo_km).toLocaleString()}<span class="stat-unit">km</span>`;
+
+    // Heading
+    const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+    const dir = d.heading != null ? dirs[Math.round(d.heading / 45) % 8] : '--';
+    document.getElementById('stat-heading').textContent = `${d.heading ?? '--'}° ${dir}`;
+
+    // Battery bar
+    const fill = document.getElementById('battery-fill');
+    fill.style.width = `${bat}%`;
+    fill.style.background = bat > 50 ? '#16a34a' : bat > 20 ? '#ca8a04' : '#dc2626';
+
+    // Status badge
+    let status = 'sleeping', label = 'Sleeping';
+    if (d.charging_state === 'Charging') { status = 'charging'; label = 'Charging'; }
+    else if (d.shift_state === 'D' || d.shift_state === 'R') { status = 'driving'; label = 'Driving'; }
+    else if (d.shift_state === 'P') { status = 'parked'; label = 'Parked'; }
+    document.getElementById('status-badge-container').innerHTML =
+      `<span class="status-badge status-${status}">${label}</span>`;
+
+    // Updated time
+    if (d.timestamp) {
+      const t = new Date(d.timestamp);
+      document.getElementById('stat-updated').textContent = `Updated: ${t.toLocaleString('ja-JP')}`;
+    }
+
+    // Car position on map
+    if (d.latitude && d.longitude) {
+      if (carMarker) map.removeLayer(carMarker);
+      carMarker = L.circleMarker([d.latitude, d.longitude], {
+        radius: 8, fillColor: '#e31937', fillOpacity: 1,
+        color: '#fff', weight: 3,
+      }).addTo(map).bindPopup(`Battery: ${bat}%<br>Speed: ${speed_kmh} km/h`);
+    }
+  } catch (e) { console.error('fetchLatest:', e); }
+}
+
+async function fetchBatteryChart() {
+  try {
+    const resp = await fetch('/api/logs?since=24h');
+    const logs = await resp.json();
+    if (!logs.length) return;
+
+    batteryChart.data.labels = logs.map(l => {
+      const d = new Date(l.timestamp);
+      return d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+    });
+    batteryChart.data.datasets[0].data = logs.map(l => l.battery_level);
+    batteryChart.update();
+  } catch (e) { console.error('fetchBatteryChart:', e); }
+}
+
+function efficiencyColor(kwh_per_km) {
+  if (kwh_per_km < 0.15) return '#16a34a';
+  if (kwh_per_km < 0.25) return '#ca8a04';
+  return '#dc2626';
+}
+
+function efficiencyClass(kwh_per_km) {
+  if (kwh_per_km < 0.15) return 'efficiency-good';
+  if (kwh_per_km < 0.25) return 'efficiency-mid';
+  return 'efficiency-bad';
+}
+
+let allTrips = [];
+let selectedTripIdx = -1;
+
+function showTripOnMap(tripIdx) {
+  tripLayers.clearLayers();
+  selectedTripIdx = tripIdx;
+
+  // Highlight selected row
+  document.querySelectorAll('.trip-row').forEach((tr, i) => {
+    tr.classList.toggle('trip-selected', i === tripIdx);
+  });
+
+  const tripsToShow = tripIdx >= 0 ? [allTrips[tripIdx]] : allTrips;
+
+  tripsToShow.forEach(trip => {
+    const pts = trip.points.filter(p => p.latitude && p.longitude);
+    if (pts.length < 2) return;
+
+    // Find max speed for normalization
+    const speeds = pts.map(p => p.speed || 0);
+    const maxSpeed = Math.max(...speeds, 1);
+
+    // Draw segments colored by speed with opacity by speed
+    for (let j = 1; j < pts.length; j++) {
+      const p1 = pts[j-1], p2 = pts[j];
+      const speed = p2.speed || 0;
+      const ratio = Math.min(speed / 80, 1); // 80km/h = max intensity
+
+      // Speed color: blue (slow) → green (medium) → red (fast)
+      let color;
+      if (speed < 20) color = '#3b82f6';       // blue - slow/stopped
+      else if (speed < 40) color = '#22c55e';   // green - city
+      else if (speed < 60) color = '#eab308';   // yellow - suburb
+      else color = '#ef4444';                    // red - highway
+
+      const opacity = 0.3 + ratio * 0.7; // min 0.3, max 1.0
+      const weight = tripIdx >= 0 ? 5 : 3;
+
+      L.polyline([[p1.latitude, p1.longitude], [p2.latitude, p2.longitude]], {
+        color, weight, opacity,
+      }).addTo(tripLayers);
+    }
+
+    // Start/End markers for selected trip
+    if (tripIdx >= 0) {
+      const start = pts[0];
+      const end = pts[pts.length - 1];
+      L.circleMarker([start.latitude, start.longitude], {
+        radius: 7, fillColor: '#22c55e', fillOpacity: 1, color: '#fff', weight: 2,
+      }).addTo(tripLayers).bindPopup('Start');
+      L.circleMarker([end.latitude, end.longitude], {
+        radius: 7, fillColor: '#ef4444', fillOpacity: 1, color: '#fff', weight: 2,
+      }).addTo(tripLayers).bindPopup('End');
+    }
+  });
+
+  // Fit map
+  if (tripLayers.getLayers().length > 0) {
+    const bounds = tripLayers.getBounds();
+    if (bounds.isValid()) map.fitBounds(bounds, { padding: [30, 30] });
+  }
+}
+
+async function fetchTrips() {
+  try {
+    const resp = await fetch('/api/trips?since=7d');
+    allTrips = await resp.json();
+
+    // Energy chart data
+    const labels = [];
+    const data = [];
+    const colors = [];
+
+    // Trips table
+    let html = '<table><thead><tr><th>Date</th><th>Duration</th><th>Distance</th><th>Battery Used</th><th>Efficiency</th></tr></thead><tbody>';
+
+    if (!allTrips.length) {
+      document.getElementById('trips-table').innerHTML = '<div class="no-data">No trips recorded yet. Data will appear after driving.</div>';
+      return;
+    }
+
+    allTrips.forEach((trip, i) => {
+      const pts = trip.points.filter(p => p.latitude && p.longitude);
+
+      // Trip stats
+      const start = new Date(trip.start_time);
+      const end = new Date(trip.end_time);
+      const duration_min = Math.round((end - start) / 60000);
+      const bat_used = (trip.start_battery ?? 0) - (trip.end_battery ?? 0);
+      const dist_km = (trip.start_odometer && trip.end_odometer)
+        ? (trip.end_odometer - trip.start_odometer).toFixed(1)
+        : '--';
+      const kwh_used = bat_used / 100 * BATTERY_KWH;
+      const eff = dist_km !== '--' && parseFloat(dist_km) > 0
+        ? (kwh_used / parseFloat(dist_km)).toFixed(2) : '--';
+      const maxSpd = Math.max(...pts.map(p => p.speed || 0));
+
+      // Chart
+      labels.push(start.toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' }));
+      const effVal = eff !== '--' ? parseFloat(eff) : 0;
+      data.push(effVal);
+      colors.push(efficiencyColor(effVal));
+
+      // Table row
+      const effClass = eff !== '--' ? efficiencyClass(parseFloat(eff)) : '';
+      html += `<tr class="trip-row" onclick="showTripOnMap(${i})">
+        <td>${start.toLocaleString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td>
+        <td>${duration_min} min</td>
+        <td>${dist_km} km</td>
+        <td>${bat_used}% (${kwh_used.toFixed(1)} kWh)</td>
+        <td class="${effClass}">${eff} kWh/km</td>
+      </tr>`;
+    });
+
+    html += '</tbody></table>';
+    html += '<div style="text-align:center;margin-top:8px;"><button class="refresh-btn" onclick="showTripOnMap(-1)">Show All Trips</button></div>';
+    document.getElementById('trips-table').innerHTML = html;
+
+    // Update energy chart
+    energyChart.data.labels = labels;
+    energyChart.data.datasets[0].data = data;
+    energyChart.data.datasets[0].backgroundColor = colors;
+    energyChart.update();
+
+    // Show all trips on map
+    showTripOnMap(-1);
+  } catch (e) { console.error('fetchTrips:', e); }
+}
+
+// Haversine in JS
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─── Init ─────────────────────────────────────────
+function refreshAll() {
+  fetchLatest();
+  fetchBatteryChart();
+  fetchTrips();
+}
+
+refreshAll();
+setInterval(fetchLatest, 10000);      // Real-time stats: 10s
+setInterval(fetchBatteryChart, 60000); // Chart: 1min
+setInterval(fetchTrips, 300000);       // Trips: 5min
+</script>
+</body>
+</html>
